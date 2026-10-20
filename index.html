@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>집수리 견적</title>
+  <!-- 개인 업무용 앱: 검색엔진·AI 수집 프로그램에 수집하지 말라고 표시 -->
+  <meta name="robots" content="noindex, nofollow, noarchive, noimageindex, noai, noimageai" />
+  <meta name="theme-color" content="#1f3a5f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="집수리 견적" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <main id="view"></main>
+    <nav class="tabbar" id="tabbar">
+      <button data-tab="search"><span class="ti">🔍</span><span>단가 검색</span></button>
+      <button data-tab="quote"><span class="ti">🧾</span><span>견적서</span><b class="badge" id="badge" hidden></b></button>
+      <button data-tab="history"><span class="ti">📁</span><span>견적 내역</span></button>
+      <button data-tab="settings"><span class="ti">⚙️</span><span>설정</span></button>
+    </nav>
+  </div>
+  <div id="sheet-root"></div>
+  <div id="toast" class="toast" hidden></div>
+  <div id="pdf-stage" aria-hidden="true"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
