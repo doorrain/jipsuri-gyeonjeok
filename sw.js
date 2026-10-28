@@ -1,5 +1,5 @@
 // 앱 화면 파일을 저장해 두어 현장에서 신호가 약해도 열리게 합니다.
-const CACHE = 'gyeonjeok-v5';
+const CACHE = 'gyeonjeok-v6';
 const SHELL = [
   './', './index.html', './css/style.css', './manifest.webmanifest', './config.js',
   './js/app.js', './js/store.js', './js/seed.js', './js/util.js', './js/quote.js', './js/pdf.js',
@@ -10,7 +10,7 @@ self.addEventListener('install', (e) => {
 });
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith('gyeonjeok-') && k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())
   );
 });
 // 인터넷이 되면 항상 최신 파일, 안 되면 저장해 둔 파일
