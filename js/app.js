@@ -426,7 +426,7 @@ function lineHtml(l) {
   return `
     <div class="line" data-lid="${l.lid}">
       <div class="top-row">
-        <div class="lname"><input class="lmemo" style="border:0;padding:0;margin:0;font-weight:500;font-size:16px" data-lf="name" value="${esc(l.name)}" /><div class="lcat">${esc(l.cat || '')}</div></div>
+        <div class="lname"><input class="lmemo" style="border:0;padding:0;margin:0;font-weight:500;font-size:16px" data-lf="name" value="${esc(l.name)}" /></div>
         <button class="x" data-act="del-line" aria-label="삭제">✕</button>
       </div>
       <div class="ctrl">
