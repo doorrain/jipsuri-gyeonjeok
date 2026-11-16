@@ -28,11 +28,12 @@ const CSS = `
 .ttl{text-align:center;font-size:34px;font-weight:900;letter-spacing:18px;color:#1f3a5f;padding-left:18px;margin:0 0 4px}
 .ttl-line{height:4px;border-top:2px solid #1f3a5f;border-bottom:1px solid #1f3a5f;margin:0 0 22px}
 .hd{display:flex;gap:18px;margin-bottom:16px}
-.hd .to{flex:1;display:flex;flex-direction:column;justify-content:space-between}
-.hd .cust{font-size:21px;font-weight:700;border-bottom:1.5px solid #1c2430;padding-bottom:4px;margin:6px 0 8px}
-.hd .cust small{font-size:14px;font-weight:500;margin-left:6px}
+.hd .to{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:space-between}
+.hd .cust{display:flex;align-items:last baseline;gap:6px;font-weight:700;border-bottom:1.5px solid #1c2430;padding-bottom:4px;margin:6px 0 8px}
+.hd .cust .nm{flex:0 1 auto;min-width:0;font-size:17px;white-space:nowrap;word-break:keep-all}
+.hd .cust .gw{flex:none;white-space:nowrap;font-size:14px;font-weight:500}
 .kv{display:flex;font-size:12.5px;margin:2px 0}.kv b{width:64px;color:#6b7686;font-weight:500;flex:none}
-.sup{width:330px;border:1.5px solid #1f3a5f;border-collapse:collapse;font-size:12px}
+.sup{flex:none;width:330px;border:1.5px solid #1f3a5f;border-collapse:collapse;font-size:12px}
 .sup th{background:#eef2f7;color:#1f3a5f;width:24px;writing-mode:vertical-rl;letter-spacing:6px;font-weight:700;border:1px solid #c5cfdc}
 .sup td{border:1px solid #c5cfdc;padding:5px 7px;vertical-align:middle}
 .sup td.k{width:72px;background:#f7f9fb;color:#55606f;text-align:center}
@@ -45,12 +46,11 @@ const CSS = `
 .sum .r{padding:8px 14px;font-size:18px;font-weight:900;color:#1f3a5f}
 .sum .v{font-size:11px;font-weight:500;color:#6b7686;margin-left:6px}
 .tb{width:100%;border-top:2px solid #1f3a5f}
-.ptr{display:flex;border-bottom:1px solid #dde3ea;min-height:30px;align-items:center}
-.ptr>div{padding:5px 6px}
+.ptr{display:flex;border-bottom:1px solid #dde3ea;min-height:24px;align-items:center}
+.ptr>div{padding:4px 6px}
 .ptr.h{background:#eef2f7;font-weight:700;color:#1f3a5f;border-bottom:1px solid #1f3a5f;text-align:center}
 .c1{width:36px;text-align:center;color:#6b7686}.c2{flex:1}.c3{width:52px;text-align:center}
-.c4{width:96px;text-align:right}.c5{width:106px;text-align:right;font-weight:700}.c6{width:130px;font-size:11.5px;color:#55606f}
-.c2 small{display:block;font-size:10.5px;color:#8a94a3}
+.c4{width:96px;text-align:right}.c5{width:106px;text-align:right;font-weight:700}.c6{width:143px;font-size:11.5px;color:#55606f}
 .ptr.h>div{text-align:center}
 .tot{margin:12px 0 0 auto;width:330px;font-size:13px}
 .tot .r{display:flex;justify-content:space-between;padding:4px 4px}
@@ -73,7 +73,7 @@ function headerHtml(q, s, t) {
         ${valid ? `<div class="kv"><b>유효기간</b>${esc(valid)}까지</div>` : ''}
       </div>
       <div>
-        <div class="cust">${esc(q.customer?.name || '')}<small>귀하</small></div>
+        <div class="cust"><span class="nm">${esc(q.customer?.name || '')}</span><span class="gw">귀하</span></div>
         ${q.customer?.phone ? `<div class="kv"><b>연락처</b>${esc(q.customer.phone)}</div>` : ''}
         ${q.customer?.address ? `<div class="kv"><b>현장주소</b>${esc(q.customer.address)}</div>` : ''}
         <div style="margin-top:8px;font-size:12.5px">아래와 같이 견적합니다.</div>
@@ -97,7 +97,7 @@ function headerHtml(q, s, t) {
 const TABLE_HEAD = `<div class="ptr h"><div class="c1">No</div><div class="c2">품명</div><div class="c3">수량</div><div class="c4">단가</div><div class="c5">금액</div><div class="c6">비고</div></div>`;
 
 function rowHtml(l, i) {
-  return `<div class="ptr"><div class="c1">${i + 1}</div><div class="c2">${esc(l.name)}${l.cat ? `<small>${esc(l.cat)}</small>` : ''}</div>
+  return `<div class="ptr"><div class="c1">${i + 1}</div><div class="c2">${esc(l.name)}</div>
     <div class="c3">${num(l.qty)}</div><div class="c4">${num(l.unit)}</div><div class="c5">${num(l.qty * l.unit)}</div><div class="c6">${esc(l.memo || '')}</div></div>`;
 }
 
@@ -164,6 +164,16 @@ export async function makeQuotePdf(q, s) {
   const text = stage.textContent;
   await Promise.all(['400', '500', '700', '900'].map((w) => document.fonts.load(`${w} 14px "Noto Sans KR"`, text).catch(() => {})));
   await document.fonts.ready;
+
+  // 받는 사람이 길면 한 줄에 들어갈 때까지 글자를 줄이고, 그래도 넘치면 이름만 줄바꿈 (귀하는 항상 그대로)
+  stage.querySelectorAll('.cust .nm').forEach((nm) => {
+    let size = 17;
+    while (nm.scrollWidth > nm.clientWidth && size > 12) {
+      size -= 0.5;
+      nm.style.fontSize = size + 'px';
+    }
+    if (nm.scrollWidth > nm.clientWidth) nm.style.whiteSpace = 'normal';
+  });
 
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
