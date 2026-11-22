@@ -153,6 +153,9 @@ mark { background: #ffe1b3; color: inherit; border-radius: 3px; }
 .tabbar button .ti { font-size: 22px; filter: grayscale(1); opacity: .6; }
 .tabbar button.on { color: var(--navy); font-weight: 700; }
 .tabbar button.on .ti { filter: none; opacity: 1; }
+/* 탭 이름은 모두 같은 크기로 한 줄에: 칸 너비를 똑같이 나누지 않고 이름 길이에 맞춰 나눔 (긴 이름 칸이 조금 넓어짐) */
+.tabbar button { flex: 1 1 auto; min-width: 0; padding: 0 2px; }
+.tabbar button > span:not(.ti) { white-space: nowrap; letter-spacing: -0.02em; }
 .badge { position: absolute; top: 8px; left: 50%; margin-left: 8px; background: var(--orange); color: #fff; font-size: 11px; border-radius: 999px; min-width: 18px; height: 18px; line-height: 18px; padding: 0 5px; }
 
 /* ---------- 바텀시트 ---------- */
