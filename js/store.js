@@ -15,8 +15,10 @@ const listeners = new Set();
 let sb = null;
 let channel = null;
 
+// 주소 끝에 ?local 을 붙이면 서버 대신 이 기기에만 저장 (시험용)
+const forceLocal = /[?&]local\b/.test(location.search);
 export const store = {
-  mode: supabaseConfig ? 'cloud' : 'local',
+  mode: supabaseConfig && !forceLocal ? 'cloud' : 'local',
   user: null,
   ready: false,
   online: true,

@@ -186,3 +186,20 @@ mark { background: #ffe1b3; color: inherit; border-radius: 3px; }
 .addbtn.sub { background: #eef1f5; color: var(--navy); width: 40px; }
 .qtybox .addbtn.in { width: 40px; }
 .notice { background: var(--orange-soft); border: 1px solid #f6c894; border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-bottom: 12px; line-height: 1.6; }
+
+/* ---------- 계약서: 서명 칸 · 미리 보기 ---------- */
+.sigpad { position: fixed; inset: 0; z-index: 90; background: #fff; display: flex; flex-direction: column; padding: 14px 14px calc(14px + var(--safe-b)); }
+.sigpad .sp-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.sigpad .sp-head b { font-size: 20px; color: var(--navy); }
+.sigpad .sp-head span { font-size: 14px; color: var(--muted); }
+.sigpad .sp-box { flex: 1; position: relative; border: 2px dashed #c5cfdc; border-radius: 14px; background: #fbfcfd; touch-action: none; overflow: hidden; min-height: 200px; }
+.sigpad canvas { position: absolute; inset: 0; touch-action: none; }
+.sigpad .sp-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #b3bcc8; font-size: 20px; pointer-events: none; }
+.sigpad .sp-line { position: absolute; left: 24px; right: 24px; bottom: 28%; border-bottom: 1.5px solid #d5dce6; pointer-events: none; }
+.sigpad .sp-btns { display: flex; gap: 8px; margin-top: 12px; }
+.sigpad .sp-btns .btn { flex: 1; }
+.sigpad .sp-btns .btn[data-sp="ok"] { flex: 1.4; }
+.pv-overlay { position: fixed; inset: 0; z-index: 80; background: #5b6472; overflow: auto; padding: 0 10px 24px; }
+.pv-overlay .pv-bar { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 10px 4px; color: #fff; background: #5b6472; }
+.pv-overlay img { display: block; width: 100%; max-width: 760px; margin: 0 auto 12px; background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+.fab-row .btn { padding: 12px 8px; font-size: 15px; }

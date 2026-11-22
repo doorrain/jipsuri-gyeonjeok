@@ -28,4 +28,9 @@ export const DEFAULT_SETTINGS = {
   vatMode: 'none', // none: 부가세 별도 표기 안 함, add: 10% 별도 추가, incl: 부가세 포함
   footerNotes:
     '본 견적은 제품비와 기본 시공비가 포함된 금액입니다.\n현장 상황, 제품 사양, 작업 난이도, 철거 및 마감 범위에 따라 금액이 달라질 수 있습니다.',
+  // 계약서 기본값 (설정에서 바꿀 수 있음)
+  contractAs: '1년',
+  contractDepositRate: 50,
+  contractExtras:
+    '현장 여건에 따라 추가 비용이 발생하는 경우, 고객과 협의한 후 진행한다.\n고객의 사정으로 일정이 변경되는 경우, 작업 일정을 다시 조율한다.',
 };

@@ -121,8 +121,23 @@ function notesHtml(q, s) {
   return h;
 }
 
+export const loadPdfLibs = () => Promise.all(LIBS.map(loadScript));
+
+// 견적서 PDF (현장장부 앱도 이 함수를 불러 씀 — 이름·결과 모양을 바꾸지 말 것)
 export async function makeQuotePdf(q, s) {
-  await Promise.all(LIBS.map(loadScript));
+  const { canvases, filename } = await quoteCanvases(q, s);
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  canvases.forEach((c, i) => {
+    if (i > 0) pdf.addPage();
+    pdf.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297);
+  });
+  return { blob: pdf.output('blob'), filename };
+}
+
+// 견적서 각 장을 그림으로 (계약서와 합본 PDF를 만들 때도 씀)
+export async function quoteCanvases(q, s) {
+  await loadPdfLibs();
   const t = calcTotals(q);
   const stage = document.getElementById('pdf-stage');
   stage.innerHTML = `<style>${CSS}</style>`;
@@ -175,15 +190,12 @@ export async function makeQuotePdf(q, s) {
     if (nm.scrollWidth > nm.clientWidth) nm.style.whiteSpace = 'normal';
   });
 
-  const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const canvases = [];
   for (let i = 0; i < pages.length; i++) {
-    const canvas = await window.html2canvas(pages[i], { scale: 2, backgroundColor: '#ffffff', useCORS: true, logging: false });
-    if (i > 0) pdf.addPage();
-    pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297);
+    canvases.push(await window.html2canvas(pages[i], { scale: 2, backgroundColor: '#ffffff', useCORS: true, logging: false }));
   }
   stage.innerHTML = '';
   const safe = (x) => String(x || '').replace(/[\\/:*?"<>|\s]+/g, '_');
   const filename = `견적서_${safe(q.customer?.name) || '고객'}_${q.date}.pdf`;
-  return { blob: pdf.output('blob'), filename };
+  return { canvases, filename };
 }
