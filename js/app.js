@@ -689,6 +689,8 @@ function renderContract() {
     return;
   }
   const c = cwork;
+  // 서명 전 계약서는 예전 기본 문구를 새 문구로 (서명한 계약서는 그대로)
+  if (!c.signedAt && c.balanceTerm === '작업 완료 시 지급') c.balanceTerm = '작업 완료 시 즉시 지급';
   const q = linkedQuote(c);
   const signed = !!c.signedAt;
   const canMerge = usesQuote(c) && hasQuoteLines(c.quoteSnap || q); // 견적서를 함께 붙일 수 있는지
@@ -802,7 +804,7 @@ function renderContract() {
     c.customItem = $('#c-item').value.trim();
     c.depositRate = parseNum($('#c-rate').value) || 0;
     c.deposit = parseNum($('#c-dep').value);
-    c.balanceTerm = $('#c-bal').value.trim() || '작업 완료 시 지급';
+    c.balanceTerm = $('#c-bal').value.trim() || '작업 완료 시 즉시 지급';
     c.asPeriod = $('#c-as-in').value.trim() || '없음';
     c.extras = (c.extras || []).map((x) => x.trim()).filter(Boolean);
     c.withQuote = withQ();

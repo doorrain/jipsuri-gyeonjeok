@@ -30,7 +30,7 @@ export function newContract(q, s, { useQuote = hasQuoteLines(q) } = {}) {
     custom: false, customItem: '',
     depositRate: Number(s.contractDepositRate) || 50,
     deposit: 0, // 주문 제작이 없을 때의 계약금(원). 0이면 계약금 없이 완료 후 일시 지급
-    balanceTerm: '작업 완료 시 지급',
+    balanceTerm: '작업 완료 시 즉시 지급',
     extras: (s.contractExtras || '').split('\n').map((x) => x.trim()).filter(Boolean),
     withQuote: useQuote,
   };
@@ -60,8 +60,8 @@ export function clauses(q, c) {
       ? `시공자는 ${no ? `견적서(No. ${no})` : '견적서'}와 이 계약서의 작업 요청 내용에 따라 작업을 성실히 시공한다.`
       : '시공자는 이 계약서의 작업 요청 내용에 따라 작업을 성실히 시공한다.'],
     ['대금 지급', m.deposit
-      ? `고객은 계약금 ${won(m.deposit)}을 계약 시 지급하고, 잔금 ${won(m.balance)}은 ${(c.balanceTerm || '작업 완료 시 지급').replace(/\s*지급$/, '')} 지급한다.`
-      : `고객은 계약 금액 ${won(m.total)}을 ${(c.balanceTerm || '작업 완료 시 지급').replace(/\s*지급$/, '')} 지급한다.`],
+      ? `고객은 계약금 ${won(m.deposit)}을 계약 시 지급하고, 잔금 ${won(m.balance)}은 ${(c.balanceTerm || '작업 완료 시 즉시 지급').replace(/\s*지급$/, '')} 지급한다.`
+      : `고객은 계약 금액 ${won(m.total)}을 ${(c.balanceTerm || '작업 완료 시 즉시 지급').replace(/\s*지급$/, '')} 지급한다.`],
   ];
   // 주문 제작·계약 취소는 표준 조항으로 항상 넣음. '주문 제작 포함'을 체크하면 품목·금액까지 구체적으로
   const rate = Number(c.depositRate) || 50;
@@ -148,7 +148,7 @@ async function contractCanvases(q, c, s) {
         <tr><th>현장 주소</th><td>${esc(cust.address || '-')}</td></tr>
         <tr><th>작업 기간</th><td>${esc(periodText(c))}</td></tr>
         <tr><th>계약 금액</th><td class="amt"><b>일금 ${koreanAmount(m.total)}원정 (₩ ${num(m.total)})</b> · ${esc(m.vat)}</td></tr>
-        <tr><th>대금 지급</th><td>${m.deposit ? `계약금 ${won(m.deposit)} (${c.custom ? '입금 후 발주' : '계약 시'}) / 잔금 ${won(m.balance)} (${esc(c.balanceTerm || '작업 완료 시 지급')})` : `${won(m.total)} (${esc(c.balanceTerm || '작업 완료 시 지급')})`}${p.account ? `\n입금 계좌: ${esc(p.account)}` : ''}</td></tr>
+        <tr><th>대금 지급</th><td>${m.deposit ? `계약금 ${won(m.deposit)} (${c.custom ? '입금 후 발주' : '계약 시'}) / 잔금 ${won(m.balance)} (${esc(c.balanceTerm || '작업 완료 시 즉시 지급')})` : `${won(m.total)} (${esc(c.balanceTerm || '작업 완료 시 즉시 지급')})`}${p.account ? `\n입금 계좌: ${esc(p.account)}` : ''}</td></tr>
         <tr><th>A/S 기간</th><td>${c.asPeriod && c.asPeriod !== '없음' ? `작업 완료일로부터 ${esc(c.asPeriod)} (시공자 과실로 인한 하자 무상 보수)` : '없음'}</td></tr>
         ${usesQuote(c) && qq?.no ? `<tr><th>견적 번호</th><td>No. ${esc(qq.no)} (${esc(qq.date || '')})</td></tr>` : ''}
       </table>`);
