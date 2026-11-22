@@ -23,7 +23,7 @@ export const store = {
   ready: false,
   online: true,
   pending: 0, // 아직 올리지 못한 변경 수
-  state: { categories: [], items: [], quotes: [], settings: { ...DEFAULT_SETTINGS } },
+  state: { categories: [], items: [], quotes: [], contracts: [], settings: { ...DEFAULT_SETTINGS } },
 };
 
 function emit() {
@@ -35,7 +35,7 @@ export function subscribe(fn) {
 }
 
 const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
-const COL_KEY = { categories: 'categories', items: 'items', quotes: 'quotes' };
+const COL_KEY = { categories: 'categories', items: 'items', quotes: 'quotes', contracts: 'contracts' }; // contracts: 공사 계약서 (견적과 따로 보관)
 const clean = (o) => JSON.parse(JSON.stringify(o)); // undefined 값 제거
 
 function readJSON(key, fallback) {
@@ -66,7 +66,7 @@ function applyPut(col, obj) {
   const i = list.findIndex((x) => x.id === obj.id);
   if (i >= 0) list[i] = obj;
   else list.push(obj);
-  if (key !== 'quotes') list.sort(byOrder);
+  if (key !== 'quotes' && key !== 'contracts') list.sort(byOrder);
 }
 function applyDel(col, id) {
   const key = COL_KEY[col];
@@ -99,7 +99,7 @@ async function fetchAll() {
     rows.push(...data);
     if (data.length < 1000) break;
   }
-  const st = { categories: [], items: [], quotes: [], settings: { ...DEFAULT_SETTINGS } };
+  const st = { categories: [], items: [], quotes: [], contracts: [], settings: { ...DEFAULT_SETTINGS } };
   rows.forEach((r) => {
     if (r.col === 'settings') st.settings = { ...DEFAULT_SETTINGS, ...r.data };
     else if (COL_KEY[r.col]) st[COL_KEY[r.col]].push(rowToObj(r));
@@ -261,6 +261,8 @@ export const saveCategory = (cat) => write({ t: 'put', col: 'categories', obj: c
 export const saveQuote = (q) => write({ t: 'put', col: 'quotes', obj: q });
 export const deleteQuote = (id) => write({ t: 'del', col: 'quotes', id });
 export const saveSettings = (s) => write({ t: 'put', col: 'settings', obj: s });
+export const saveContractDoc = (c) => write({ t: 'put', col: 'contracts', obj: c });
+export const deleteContractDoc = (id) => write({ t: 'del', col: 'contracts', id });
 
 // 단가표(분류+항목)를 통째로 바꾸기: 기본값 되돌리기, 백업 불러오기에 사용
 export async function replacePriceList(categories, items) {

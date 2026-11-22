@@ -1,4 +1,5 @@
-// 공사 계약서: 견적서를 바탕으로 만들고, 고객이 휴대폰 화면에 직접 서명합니다.
+// 공사 계약서: 견적과 따로 보관하며(contracts), 견적을 불러오거나 새로 작성하고, 고객이 휴대폰 화면에 직접 서명합니다.
+// q = 연결된 견적(없으면 null). 함수 인자 순서는 (q, c)로 통일.
 // 서명하면 그때의 견적·업체 정보를 함께 저장(스냅샷)해, 나중에 견적이나 설정을 바꿔도 서명한 계약서는 그대로입니다.
 import { esc, num, won, koreanAmount, today } from './util.js';
 import { calcTotals, VAT_LABEL } from './quote.js';
@@ -14,13 +15,14 @@ export const krDate = (s) => {
 };
 
 // 견적 내용이 있는지 (계약서에 불러올 수 있는지)
-export const hasQuoteLines = (q) => (q.lines || []).some((l) => l.name && Number(l.qty) * Number(l.unit));
+export const hasQuoteLines = (q) => (q?.lines || []).some((l) => l.name && Number(l.qty) * Number(l.unit));
 
 // 새 계약서: useQuote면 견적 내용·금액을 불러오고, 아니면 빈 계약서 (금액은 직접 입력)
 export function newContract(q, s, { useQuote = hasQuoteLines(q) } = {}) {
   const lines = useQuote ? (q.lines || []).map((l) => `· ${l.name}${Number(l.qty) !== 1 ? ` × ${num(l.qty)}` : ''}${l.memo ? ` (${l.memo})` : ''}`) : [];
   return {
-    useQuote,
+    useQuote, quoteId: useQuote ? q.id : '',
+    customer: { name: '', phone: '', address: '', ...(q?.customer || {}) },
     amount: 0, vatMode: 'none', // 견적을 안 쓸 때 직접 넣는 계약 금액·부가세 표시
     request: useQuote ? [lines.join('\n'), q.memo?.trim()].filter(Boolean).join('\n') : '',
     startDate: '', endDate: '',
@@ -40,8 +42,9 @@ export const usesQuote = (c) => c.useQuote !== false;
 // 금액: 견적을 쓰면 견적 금액(서명했으면 서명 때 금액), 아니면 직접 넣은 금액
 export function money(q, c) {
   const qq = c.quoteSnap || q;
-  const total = usesQuote(c) ? calcTotals(qq).total : Math.round(Number(c.amount) || 0);
-  const vatMode = usesQuote(c) ? qq.vatMode : c.vatMode;
+  const fromQuote = usesQuote(c) && qq;
+  const total = fromQuote ? calcTotals(qq).total : Math.round(Number(c.amount) || 0);
+  const vatMode = fromQuote ? qq.vatMode : c.vatMode;
   const deposit = c.custom ? Math.round((total * (Number(c.depositRate) || 0)) / 100) : Math.min(Number(c.deposit) || 0, total);
   return { total, deposit, balance: total - deposit, vat: VAT_LABEL[vatMode || 'none'] };
 }
@@ -51,23 +54,25 @@ const periodText = (c) => (c.startDate || c.endDate ? `${krDate(c.startDate) || 
 // 기본 조항 (선택한 내용에 따라 자동으로 바뀜)
 export function clauses(q, c) {
   const m = money(q, c);
-  const no = (c.quoteSnap || q).no;
+  const no = (c.quoteSnap || q)?.no;
   const out = [
-    ['공사 내용', usesQuote(c)
-      ? `시공자는 ${no ? `견적서(No. ${no})` : '견적서'}와 이 계약서에 적힌 내용에 따라 공사를 성실히 시공한다.`
-      : '시공자는 이 계약서에 적힌 내용에 따라 공사를 성실히 시공한다.'],
+    ['작업 내용', usesQuote(c)
+      ? `시공자는 ${no ? `견적서(No. ${no})` : '견적서'}와 이 계약서의 작업 요청 내용에 따라 작업을 성실히 시공한다.`
+      : '시공자는 이 계약서의 작업 요청 내용에 따라 작업을 성실히 시공한다.'],
     ['대금 지급', m.deposit
       ? `고객은 계약금 ${won(m.deposit)}을 계약 시 지급하고, 잔금 ${won(m.balance)}은 ${(c.balanceTerm || '작업 완료 시 지급').replace(/\s*지급$/, '')} 지급한다.`
       : `고객은 계약 금액 ${won(m.total)}을 ${(c.balanceTerm || '작업 완료 시 지급').replace(/\s*지급$/, '')} 지급한다.`],
   ];
-  if (c.custom) {
-    out.push(['주문 제작', `주문 제작 품목${c.customItem ? `(${c.customItem})` : ''}이 포함된 공사는 ${usesQuote(c) ? '견적' : '계약'} 금액의 ${Number(c.depositRate) || 0}%(${won(m.deposit)})가 입금된 후 발주를 진행한다.`]);
-    out.push(['계약 취소', '주문 제작 품목은 발주 후에는 계약을 취소할 수 없다. 고객의 사정으로 취소를 원하는 경우, 이미 발생한 주문 제작 비용은 고객에게 청구된다.']);
-  }
-  out.push(['공사 기간', `공사 기간은 ${periodText(c)}로 한다. 날씨, 자재 수급, 현장 여건 등 부득이한 사유가 있으면 서로 협의하여 조정한다.`]);
+  // 주문 제작·계약 취소는 표준 조항으로 항상 넣음. '주문 제작 포함'을 체크하면 품목·금액까지 구체적으로
+  const rate = Number(c.depositRate) || 50;
+  out.push(['주문 제작', c.custom
+    ? `이 계약에는 주문 제작 품목${c.customItem ? `(${c.customItem})` : ''}이 포함되며, ${usesQuote(c) ? '견적' : '계약'} 금액의 ${rate}%(${won(m.deposit)})가 입금된 후 발주를 진행한다.`
+    : `주문 제작 품목이 포함되는 경우, 견적 금액의 ${rate}%가 입금된 후 발주를 진행한다.`]);
+  out.push(['계약 취소', '주문 제작 품목은 발주 후에는 계약을 취소할 수 없다. 고객의 사정으로 계약 취소를 원하는 경우, 이미 발생한 주문 제작 비용은 고객에게 청구된다.']);
+  out.push(['작업 기간', `작업 기간은 ${periodText(c)}로 한다. 날씨, 자재 수급, 현장 여건 등 부득이한 사유가 있으면 서로 협의하여 조정한다.`]);
   if (c.asPeriod && c.asPeriod !== '없음') {
     // 법에서 정한 하자담보책임(민법 등)을 줄이는 조항은 무효가 될 수 있어, 무상 A/S 약속으로 적고 법령 책임은 따로 남겨 둠
-    out.push(['하자 보수(A/S)', `시공자의 명백한 시공상 과실로 인한 하자가 발생한 경우, 시공자는 작업 완료일로부터 ${c.asPeriod} 동안 무상으로 보수한다. 단, 고객의 사용 과실, 천재지변, 소모품, 고객이 준비한 제품의 결함으로 인한 경우는 제외한다. 이와 별도로 관계 법령에서 정한 하자담보책임은 그에 따른다.`]);
+    out.push(['A/S(하자 보수)', `시공자의 명백한 시공상 과실로 인한 하자가 발생한 경우, 시공자는 작업 완료일로부터 ${c.asPeriod} 동안 무상으로 보수한다. 단, 고객의 사용 과실, 천재지변, 소모품, 고객이 준비한 제품의 결함으로 인한 경우는 제외한다. 이와 별도로 관계 법령에서 정한 하자담보책임은 그에 따른다.`]);
   }
   out.push(['기타', '이 계약서에 정하지 않은 사항은 서로 협의하여 정한다.']);
   return out;
@@ -81,7 +86,7 @@ const CSS = `
 .ct .ttl-line{height:4px;border-top:2px solid #1f3a5f;border-bottom:1px solid #1f3a5f;margin:0 0 14px}
 .ct .intro{margin:0 0 10px}
 .ct table.info{width:100%;border-collapse:collapse;margin-bottom:12px}
-.ct table.info th{width:96px;background:#eef2f7;color:#1f3a5f;font-weight:700;text-align:left;padding:6px 10px;border:1px solid #c5cfdc;vertical-align:top}
+.ct table.info th{width:104px;background:#eef2f7;color:#1f3a5f;font-weight:700;text-align:left;padding:6px 10px;border:1px solid #c5cfdc;vertical-align:top}
 .ct table.info td{padding:6px 10px;border:1px solid #c5cfdc;white-space:pre-wrap;word-break:keep-all}
 .ct .amt b{font-size:14px;color:#1f3a5f}
 .ct .cl{margin:0 0 5px;word-break:keep-all}
@@ -108,7 +113,7 @@ async function contractCanvases(q, c, s) {
   const qq = c.quoteSnap || q;
   const p = c.party || s; // 서명했으면 서명 때 업체 정보
   const m = money(q, c);
-  const cust = qq.customer || {};
+  const cust = c.customer || qq?.customer || {};
   const stage = document.createElement('div');
   stage.style.cssText = 'position:fixed;left:-10000px;top:0';
   stage.innerHTML = `<style>${CSS}</style>`;
@@ -137,15 +142,15 @@ async function contractCanvases(q, c, s) {
   };
   try {
     add(`<div class="ttl">공사계약서</div><div class="ttl-line"></div>
-      <p class="intro">고객(이하 "고객")과 ${esc(p.company || '시공자')}(이하 "시공자")는 아래 공사에 대하여 다음과 같이 계약을 맺는다.</p>
+      <p class="intro">고객(이하 "고객")과 ${esc(p.company || '시공자')}(이하 "시공자")는 아래 작업에 대하여 다음과 같이 계약을 맺는다.</p>
       <table class="info">
-        <tr><th>공사 내용</th><td>${esc(c.request || '-')}</td></tr>
+        <tr><th>작업 요청 내용</th><td>${esc(c.request || '-')}</td></tr>
         <tr><th>현장 주소</th><td>${esc(cust.address || '-')}</td></tr>
-        <tr><th>공사 기간</th><td>${esc(periodText(c))}</td></tr>
+        <tr><th>작업 기간</th><td>${esc(periodText(c))}</td></tr>
         <tr><th>계약 금액</th><td class="amt"><b>일금 ${koreanAmount(m.total)}원정 (₩ ${num(m.total)})</b> · ${esc(m.vat)}</td></tr>
         <tr><th>대금 지급</th><td>${m.deposit ? `계약금 ${won(m.deposit)} (${c.custom ? '입금 후 발주' : '계약 시'}) / 잔금 ${won(m.balance)} (${esc(c.balanceTerm || '작업 완료 시 지급')})` : `${won(m.total)} (${esc(c.balanceTerm || '작업 완료 시 지급')})`}${p.account ? `\n입금 계좌: ${esc(p.account)}` : ''}</td></tr>
-        <tr><th>하자 보수</th><td>${c.asPeriod && c.asPeriod !== '없음' ? `작업 완료일로부터 ${esc(c.asPeriod)} (시공자 과실로 인한 하자 무상 보수)` : '없음'}</td></tr>
-        ${usesQuote(c) && qq.no ? `<tr><th>견적 번호</th><td>No. ${esc(qq.no)} (${esc(qq.date || '')})</td></tr>` : ''}
+        <tr><th>A/S 기간</th><td>${c.asPeriod && c.asPeriod !== '없음' ? `작업 완료일로부터 ${esc(c.asPeriod)} (시공자 과실로 인한 하자 무상 보수)` : '없음'}</td></tr>
+        ${usesQuote(c) && qq?.no ? `<tr><th>견적 번호</th><td>No. ${esc(qq.no)} (${esc(qq.date || '')})</td></tr>` : ''}
       </table>`);
     clauses(q, c).forEach(([t, b], i) => add(`<p class="cl"><b>제${i + 1}조 (${esc(t)})</b> ${esc(b)}</p>`));
     if ((c.extras || []).length) add(`<h4>특약 사항</h4>${c.extras.map((x, i) => `<p class="cl">${i + 1}. ${esc(x)}</p>`).join('')}`);
@@ -193,7 +198,7 @@ export async function makeContractPdf(q, c, s, { withQuote } = {}) {
   const qq = c.quoteSnap || q;
   const safe = (x) => String(x || '').replace(/[\\/:*?"<>|\s]+/g, '_');
   const kind = withQuote && hasQuoteLines(qq) ? '계약서+견적서' : '계약서';
-  return { blob: pdf.output('blob'), filename: `${kind}_${safe(qq.customer?.name) || '고객'}_${(c.signedAt || today()).slice(0, 10)}.pdf` };
+  return { blob: pdf.output('blob'), filename: `${kind}_${safe(c.customer?.name || qq?.customer?.name) || '고객'}_${(c.signedAt || today()).slice(0, 10)}.pdf` };
 }
 
 // 미리 보기용: 첫 장 그림 주소

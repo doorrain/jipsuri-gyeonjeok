@@ -3,7 +3,7 @@
 import { store, subscribe, rescueCopy, rescueCounts, uploadRescue, dismissRescue } from './store.js';
 
 const APP = '견적앱';
-const LABEL = { categories: '분류', items: '단가 항목', quotes: '견적서' };
+const LABEL = { categories: '분류', items: '단가 항목', quotes: '견적서', contracts: '계약서' };
 const summary = (r) => rescueCounts(r).filter(([, n]) => n).map(([k, n]) => `${LABEL[k] || k} ${n}건`).join(', ');
 
 function download(r) {

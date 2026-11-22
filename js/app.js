@@ -1,7 +1,7 @@
 import './rescue.js'; // 비상 복구(2026-11 서버 이전)
 import {
   store, subscribe, initStore, login, logout, saveItem, deleteItem, saveCategory, saveQuote, deleteQuote,
-  saveSettings, replacePriceList, newId,
+  saveSettings, replacePriceList, newId, saveContractDoc, deleteContractDoc,
 } from './store.js';
 import { esc, won, num, manwon, parseNum, today, matchScore, highlight, copyText } from './util.js';
 import { calcTotals, buildChecklist, buildMessage, nextQuoteNo, STATUSES, VAT_LABEL } from './quote.js';
@@ -15,7 +15,7 @@ const DRAFT_KEY = 'gyeonjeok-draft-v1';
 const AUTHOR_KEY = 'gyeonjeok-author';
 
 let tab = (location.hash || '#search').slice(1);
-const ui = { q: '', cat: '전체', hq: '', hstatus: '전체', hauthor: '전체' };
+const ui = { q: '', cat: '전체', hq: '', hstatus: '전체', hauthor: '전체', hkind: 'quote', cstatus: '전체' };
 let draft = loadDraft();
 
 /* ================= 임시 견적(이 기기) ================= */
@@ -100,7 +100,7 @@ function render() {
   }
   if (store.mode === 'cloud' && !store.user) return renderLogin();
   $('#tabbar').hidden = false;
-  ({ search: renderSearch, quote: renderQuote, history: renderHistory, settings: renderSettings }[tab] || renderSearch)();
+  ({ search: renderSearch, quote: renderQuote, contract: renderContract, history: renderHistory, settings: renderSettings }[tab] || renderSearch)();
 }
 
 /* ---------- 로그인 ---------- */
@@ -396,7 +396,6 @@ function renderQuote() {
     <div class="fab-row">
       <button class="btn ghost" data-act="save-quote">💾 저장</button>
       <button class="btn orange" data-act="pdf">📄 견적서</button>
-      <button class="btn" data-act="contract">✍️ 계약서${d.contract?.signedAt ? ' ✓' : ''}</button>
     </div>`;
 
   $('#q-status').onchange = (e) => { d.status = e.target.value; touch(); };
@@ -528,10 +527,9 @@ async function saveDraft(silent, { allowEmpty = false } = {}) {
   draft.updatedBy = author();
   draft.total = calcTotals(draft).total;
   const { dirty, ...data } = draft;
-  // 계약서는 계약서 화면에서만 바뀜: 다른 기기에서 서명했어도 덮어쓰지 않게 저장된 쪽을 그대로 둠
-  const saved = store.state.quotes.find((x) => x.id === data.id);
-  if (saved?.contract) { data.contract = saved.contract; draft.contract = saved.contract; }
-  if (saved?.contractHistory) data.contractHistory = saved.contractHistory;
+  // 계약서는 계약서 탭에서 따로 저장 (예전에 견적에 붙어 있던 계약서 흔적은 지움)
+  delete data.contract;
+  delete data.contractHistory;
   try {
     await saveQuote(data);
   } catch (e) {
@@ -600,69 +598,136 @@ function showPdfSheet(blob, filename, title) {
   }
 }
 
-/* ---------- 공사 계약서 ---------- */
-// 계약서는 견적서(q.contract)에 붙어 있음. 고객이 서명하면 잠기고, 그때의 견적·업체 정보를 함께 저장
-async function saveContract(q, c, extra = {}) {
-  const nq = { ...q, ...extra, contract: c, updatedAt: Date.now(), updatedBy: author() };
-  await saveQuote(nq);
-  // 견적서 화면에 같은 견적을 열어 두었으면 그쪽에도 반영 (나중에 견적 저장 때 계약서가 지워지지 않게)
-  if (draft.id === q.id) {
-    draft.contract = c;
-    Object.assign(draft, extra);
-    persistDraft();
-  }
-  return nq;
+/* ---------- 공사 계약서 (계약서 탭) ---------- */
+// 계약서는 견적과 따로 'contracts'에 보관. 견적을 불러와 만들거나 빈 계약서로 시작.
+// 고객이 서명하면 잠기고, 그때의 견적·업체 정보를 함께 저장(스냅샷)
+const CDRAFT_KEY = 'gyeonjeok-contract-work-v1';
+let cwork = (() => { try { return JSON.parse(localStorage.getItem(CDRAFT_KEY)); } catch (_) { return null; } })();
+function persistCwork() {
+  try { cwork ? localStorage.setItem(CDRAFT_KEY, JSON.stringify(cwork)) : localStorage.removeItem(CDRAFT_KEY); } catch (_) {}
+}
+const linkedQuote = (c) => (c?.quoteId ? store.state.quotes.find((x) => x.id === c.quoteId) || null : null);
+const contractName = (c) => c.customer?.name || '(고객명 없음)';
+function nextContractNo(date, list) {
+  const prefix = 'C' + date.replace(/-/g, '').slice(2) + '-';
+  const nums = list.map((x) => x.no || '').filter((n) => n.startsWith(prefix)).map((n) => parseInt(n.slice(prefix.length), 10) || 0);
+  return prefix + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(2, '0');
 }
 
-async function openContract(qid, startWith) {
-  const q = store.state.quotes.find((x) => x.id === qid);
-  if (!q) return toast('먼저 견적을 저장해 주세요');
+// 새 계약서 만들기 (q가 있으면 그 견적 내용을 불러옴)
+function startContract(q) {
+  const c = newContract(q, store.state.settings, { useQuote: !!q });
+  cwork = { ...c, id: null, no: '', date: today(), dirty: true };
+  persistCwork();
+  go('contract');
+  toast(q ? `견적 No.${q.no} 내용을 불러왔어요` : '빈 계약서로 시작해요');
+}
+function openSavedContract(id) {
+  const c = store.state.contracts.find((x) => x.id === id);
+  if (!c) return toast('계약서를 찾을 수 없어요');
+  cwork = { ...structuredClone(c), dirty: false };
+  persistCwork();
+  go('contract');
+}
+function confirmLeaveContract() {
+  if (!cwork || !cwork.dirty || cwork.signedAt) return true;
+  return confirm('작성 중인 계약서가 저장되지 않았어요. 그래도 계속할까요?');
+}
+async function saveCwork(extra = {}) {
+  const isNew = !cwork.id;
+  if (isNew) {
+    cwork.id = newId('ct');
+    cwork.no = nextContractNo(cwork.date || today(), store.state.contracts);
+    cwork.createdAt = Date.now();
+    cwork.createdBy = author();
+  }
+  Object.assign(cwork, extra, { updatedAt: Date.now(), updatedBy: author() });
+  const { dirty, ...data } = cwork;
+  await saveContractDoc(data);
+  cwork.dirty = false;
+  persistCwork();
+  return cwork;
+}
+
+// 견적서 고르기 (계약서에 불러올 견적)
+function pickQuoteSheet() {
+  const list = store.state.quotes.filter(hasQuoteLines).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  openSheet(`
+    <h2>📥 견적서에서 불러오기</h2>
+    <div class="searchbox" style="padding:0 0 10px"><input id="pq" type="search" placeholder="고객명, 주소, 번호로 찾기" /></div>
+    <div class="list" id="pq-list" style="border-radius:10px;overflow:hidden"></div>`, (sh) => {
+    const draw = () => {
+      const w = $('#pq', sh).value.trim().toLowerCase();
+      const rows = list.filter((q) => !w || [q.no, q.customer?.name, q.customer?.address, q.customer?.phone].join(' ').toLowerCase().includes(w)).slice(0, 50);
+      $('#pq-list', sh).innerHTML = rows.map((q) => `<div class="row" data-pq="${q.id}" style="cursor:pointer"><div class="main"><div class="name">${esc(q.customer?.name || '(고객명 없음)')} <span class="status s-${esc(q.status)}">${esc(q.status)}</span></div>
+        <div class="meta">${esc(q.date)} · No.${esc(q.no)}</div><div class="meta">${esc((q.lines || []).map((l) => l.name).join(', '))}</div></div><div class="price">${won(calcTotals(q).total)}</div></div>`).join('') || '<div class="empty">견적서가 없어요</div>';
+      sh.querySelectorAll('[data-pq]').forEach((r) => (r.onclick = () => { closeSheet(); startContract(store.state.quotes.find((x) => x.id === r.dataset.pq)); }));
+    };
+    $('#pq', sh).addEventListener('input', draw);
+    draw();
+  });
+}
+
+function renderContract() {
   const s = store.state.settings;
-  // 처음 쓰는 계약서: 견적 내용이 있으면 불러올지 먼저 물어봄, 없으면 바로 새로 작성
-  if (!q.contract && !startWith) {
-    if (!hasQuoteLines(q)) return openContract(qid, 'blank');
-    openSheet(`
-      <h2>✍️ 공사 계약서</h2>
-      <p>이 견적서(No.${esc(q.no)})의 내용을 계약서에 불러올까요?</p>
-      <div class="totals" style="margin:8px 0 14px">${(q.lines || []).slice(0, 5).map((l) => `<div class="tr"><span>${esc(l.name)} ×${num(l.qty)}</span><span>${won(l.qty * l.unit)}</span></div>`).join('')}${q.lines.length > 5 ? `<div class="tr"><span class="hint" style="margin:0">외 ${q.lines.length - 5}개</span><span></span></div>` : ''}
-        <div class="tr grand"><span>합계</span><span>${won(calcTotals(q).total)}</span></div></div>
-      <div class="btnrow" style="flex-direction:column">
-        <button class="btn orange block" id="ci-yes">📥 견적 내용 불러오기</button>
-        <button class="btn ghost block" id="ci-no">✏️ 새로 작성 (공사 내용·금액 직접 입력)</button>
-      </div>`, () => {
-      $('#ci-yes').onclick = () => openContract(qid, 'quote');
-      $('#ci-no').onclick = () => openContract(qid, 'blank');
-    });
+  // 시작 화면: 견적서에서 불러오기 / 빈 계약서
+  if (!cwork) {
+    const recent = [...store.state.contracts].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 5);
+    view.innerHTML = `
+      <div class="top"><h1>✍️ 계약서</h1></div>
+      <div class="card">
+        <h2>새 계약서 만들기</h2>
+        <div class="btnrow" style="flex-direction:column">
+          <button class="btn orange block" id="cs-quote">📥 견적서에서 불러오기</button>
+          <button class="btn ghost block" id="cs-blank">✏️ 빈 계약서로 시작 (내용·금액 직접 입력)</button>
+        </div>
+      </div>
+      ${recent.length ? `<div class="section-h"><span>최근 계약서</span></div><div class="list">${recent.map(contractRow).join('')}</div>` : ''}`;
+    $('#cs-quote').onclick = () => (store.state.quotes.some(hasQuoteLines) ? pickQuoteSheet() : alert('불러올 견적서가 없어요. 빈 계약서로 시작해 주세요.'));
+    $('#cs-blank').onclick = () => startContract(null);
+    bindContractRows();
     return;
   }
-  const c = q.contract ? structuredClone(q.contract) : newContract(q, s, { useQuote: startWith === 'quote' });
+  const c = cwork;
+  const q = linkedQuote(c);
   const signed = !!c.signedAt;
   const canMerge = usesQuote(c) && hasQuoteLines(c.quoteSnap || q); // 견적서를 함께 붙일 수 있는지
   const m = money(q, c);
-  const cust = (c.quoteSnap || q).customer || {};
-  openSheet(`
-    <h2>✍️ 공사 계약서 <span class="status ${signed ? 's-완료' : ''}">${signed ? '서명 완료' : '작성 중'}</span></h2>
-    <p class="hint">견적 No.${esc(q.no)} · ${esc(cust.name || '(고객명 없음)')}</p>
+  const cust = c.customer || {};
+  view.innerHTML = `
+    <div class="top">
+      <h1>✍️ 계약서 <span class="sub">${c.no ? 'No. ' + esc(c.no) : '저장 전'}${!signed && c.dirty ? ' · 저장 안 됨' : ''}</span></h1>
+      <div class="btnrow"><span class="status ${signed ? 's-완료' : ''}" style="align-self:center">${signed ? '서명 완료' : '작성 중'}</span>
+        <button class="btn sm ghost" id="c-new" style="flex:none;margin-left:auto">＋ 새 계약서</button></div>
+    </div>
+    ${usesQuote(c) ? `<div class="card" style="padding:10px 14px"><span class="hint" style="margin:0">📎 견적 No.${esc((c.quoteSnap || q)?.no || '-')}${q ? '' : ' (견적이 삭제됨)'}에서 불러온 계약서</span></div>` : ''}
     ${signed ? `
-      <div class="notice">✅ ${esc(c.signedAt.slice(0, 10))} 고객 서명 완료. 서명한 계약서는 내용을 고칠 수 없어요.<br/>바꿔야 하면 아래 <b>새 계약서로 다시 작성</b>을 누르세요.</div>
+    <div class="card">
+      <div class="notice">✅ ${esc(c.signedAt.slice(0, 10))} ${esc(cust.name || '')} 고객 서명 완료. 서명한 계약서는 내용을 고칠 수 없어요.<br/>바꿔야 하면 아래 <b>새 계약서로 다시 작성</b>을 누르세요.</div>
       <div class="totals"><div class="tr"><span>계약 금액</span><span>${won(m.total)}</span></div>${m.deposit ? `<div class="tr"><span>계약금</span><span>${won(m.deposit)}</span></div><div class="tr"><span>잔금</span><span>${won(m.balance)}</span></div>` : ''}</div>
       ${canMerge ? `<label class="ck" style="margin-top:10px"><input type="checkbox" id="c-withq" ${c.withQuote !== false ? 'checked' : ''} /><span class="tx">견적서도 함께 붙여서 보내기 (합본 PDF)</span></label>` : ''}
       <div class="btnrow" style="flex-direction:column;margin-top:8px">
         <button class="btn orange block" id="c-send">📤 서명한 계약서 PDF 보내기</button>
         <button class="btn ghost block" id="c-prev">👀 미리 보기</button>
         <button class="btn danger block" id="c-redo">새 계약서로 다시 작성</button>
-      </div>` : `
-      <label class="field"><span>공사 내용 (작업 요청 내용)</span><textarea id="c-req" rows="4">${esc(c.request)}</textarea></label>
+      </div>
+    </div>` : `<div id="c-form">
+    <div class="card">
+      <h2>🔧 작업 요청 내용 · 작업 기간</h2>
+      <label class="field"><span>작업 요청 내용</span><textarea id="c-req" rows="4" placeholder="예) 욕실 타일 보수, 실리콘 재시공">${esc(c.request)}</textarea></label>
       <div class="grid2">
-        <label class="field"><span>공사 시작일</span><input type="date" id="c-start" value="${esc(c.startDate)}" /></label>
+        <label class="field"><span>작업 시작일</span><input type="date" id="c-start" value="${esc(c.startDate)}" /></label>
         <label class="field"><span>완료 예정일</span><input type="date" id="c-end" value="${esc(c.endDate)}" /></label>
       </div>
       <p class="hint" style="margin-top:-6px">비워 두면 "협의 후 결정"으로 들어가요.</p>
+    </div>
+    <div class="card">
+      <h2>💰 금액 · 지급</h2>
       ${usesQuote(c)
     ? `<div class="totals" style="margin-bottom:10px"><div class="tr"><span>계약 금액 (견적서)</span><span>${won(m.total)}</span></div><div class="tr"><span></span><span class="hint" style="margin:0">${esc(m.vat)}</span></div></div>`
     : `<div class="field"><span>계약 금액</span><div class="money-in"><input id="c-amt" inputmode="numeric" value="${c.amount ? num(c.amount) : ''}" placeholder="0" /><span>원</span></div></div>
       <div class="seg" id="c-vat" style="margin:-4px 0 12px">${[['none', '부가세 별도'], ['incl', '부가세 포함']].map(([k, v]) => `<button type="button" data-v="${k}" class="${(c.vatMode || 'none') === k ? 'on' : ''}">${v}</button>`).join('')}</div>`}
-      <label class="ck"><input type="checkbox" id="c-custom" ${c.custom ? 'checked' : ''} /><span class="tx"><b>주문 제작 품목 포함</b><span class="src">계약금 입금 후 발주, 발주 후 취소 불가, 취소 시 제작비 청구 조항이 들어가요</span></span></label>
+      <label class="ck"><input type="checkbox" id="c-custom" ${c.custom ? 'checked' : ''} /><span class="tx"><b>주문 제작 품목 포함</b><span class="src">주문 제작 조항(계약금 입금 후 발주, 발주 후 취소 불가, 취소 시 제작비 청구)은 항상 들어가요. 체크하면 품목 이름과 계약금 금액이 구체적으로 적혀요</span></span></label>
       <div id="c-custom-box" ${c.custom ? '' : 'hidden'}>
         <div class="grid2">
           <label class="field"><span>주문 제작 품목</span><input id="c-item" value="${esc(c.customItem)}" placeholder="예) 중문, 맞춤 가구" /></label>
@@ -674,111 +739,133 @@ async function openContract(qid, startWith) {
       </div>
       <div class="hint" id="c-split" style="margin-top:-4px"></div>
       <label class="field"><span>잔금 지급 시점</span><input id="c-bal" value="${esc(c.balanceTerm)}" /></label>
+    </div>
+    <div class="card">
+      <h2>🛠 A/S 기간 · 특약</h2>
       <div class="field"><span>A/S (하자 보수) 기간</span>
         <div class="seg" id="c-as">${['없음', '6개월', '1년', '2년'].map((x) => `<button type="button" data-as="${x}" class="${c.asPeriod === x ? 'on' : ''}">${x}</button>`).join('')}</div>
         <input id="c-as-in" style="margin-top:6px" value="${esc(c.asPeriod)}" placeholder="직접 입력 (예: 3년)" />
       </div>
       <div class="field"><span>특약 사항 (기본 조항 외에 추가할 내용)</span><div id="c-extras"></div>
         <button type="button" class="btn ghost sm" id="c-add-ex" style="margin-top:6px">＋ 특약 추가</button></div>
-      <h2 style="font-size:15px;margin-top:6px">👤 고객 정보 <span class="right hint" style="margin:0">견적서에도 함께 저장돼요</span></h2>
-      <label class="field"><span>고객명 (상호명)</span><input id="c-name" value="${esc(q.customer?.name || '')}" /></label>
-      <div class="grid2">
-        <label class="field"><span>연락처</span><input id="c-phone" type="tel" value="${esc(q.customer?.phone || '')}" /></label>
-        <label class="field"><span>현장 주소</span><input id="c-addr" value="${esc(q.customer?.address || '')}" /></label>
-      </div>
+    </div>
+    <div class="card">
+      <h2>👤 고객 정보</h2>
+      <label class="field"><span>고객명 (상호명)</span><input id="c-name" value="${esc(cust.name || '')}" /></label>
+      <label class="field"><span>연락처</span><input id="c-phone" type="tel" value="${esc(cust.phone || '')}" /></label>
+      <label class="field"><span>현장 주소</span><input id="c-addr" value="${esc(cust.address || '')}" /></label>
       ${canMerge ? `<label class="ck"><input type="checkbox" id="c-withq" ${c.withQuote !== false ? 'checked' : ''} /><span class="tx">보낼 때 견적서도 함께 붙이기 (합본 PDF)</span></label>` : ''}
       ${!s.company || !s.owner ? '<div class="notice" style="margin-top:8px">설정에 <b>상호·대표자·사업자번호·계좌·도장</b>을 넣어 두면 계약서에 자동으로 들어가요.</div>' : ''}
-      <div class="btnrow" style="margin-top:10px">
-        <button class="btn ghost" id="c-save">💾 저장</button>
-        <button class="btn ghost" id="c-prev">👀 미리 보기</button>
-      </div>
-      <button class="btn orange block" id="c-sign" style="margin-top:8px">✍️ 고객 서명받기</button>`}`, (sh) => {
-    const withQ = () => canMerge && $('#c-withq', sh)?.checked !== false;
-    if (signed) {
-      $('#c-withq', sh) && ($('#c-withq', sh).onchange = async (e) => { c.withQuote = e.target.checked; await saveContract(q, c); });
-      $('#c-prev', sh).onclick = () => previewContract(q, c);
-      $('#c-send', sh).onclick = () => sendContract(q, c, withQ());
-      $('#c-redo', sh).onclick = async () => {
-        if (!confirm('서명한 계약서는 기록으로 남기고, 내용을 고칠 수 있는 새 계약서를 만들까요?\n새 계약서는 고객에게 다시 서명받아야 해요.')) return;
-        const { signature, signedAt, party, quoteSnap, signName, ...rest } = c;
-        const history = [...(q.contractHistory || []), c];
-        await saveContract(q, rest, { contractHistory: history });
-        closeSheet();
-        openContract(q.id);
-      };
-      return;
+    </div>
+    <div class="fab-row">
+      <button class="btn ghost" id="c-save">💾 저장</button>
+      <button class="btn ghost" id="c-prev">👀 미리 보기</button>
+      <button class="btn orange" id="c-sign">✍️ 서명받기</button>
+    </div></div>`}`;
+
+  $('#c-new').onclick = () => {
+    if (!confirmLeaveContract()) return;
+    cwork = null;
+    persistCwork();
+    renderContract();
+  };
+  const withQ = () => canMerge && $('#c-withq')?.checked !== false;
+  if (signed) {
+    $('#c-withq') && ($('#c-withq').onchange = async (e) => { c.withQuote = e.target.checked; await saveCwork(); });
+    $('#c-prev').onclick = () => previewContract(q, c);
+    $('#c-send').onclick = () => sendContract(q, c, withQ());
+    $('#c-redo').onclick = async () => {
+      if (!confirm('서명한 계약서는 기록으로 남기고, 내용을 고칠 수 있는 새 계약서를 만들까요?\n새 계약서는 고객에게 다시 서명받아야 해요.')) return;
+      const { signature, signedAt, party, quoteSnap, signName, id, no, createdAt, createdBy, ...rest } = c;
+      cwork = { ...rest, id: null, no: '', date: today(), replaces: c.no, dirty: true };
+      persistCwork();
+      renderContract();
+      toast(`${c.no} 계약서를 바탕으로 새로 작성해요`);
+    };
+    return;
+  }
+  const touchC = () => { if (!c.dirty) { c.dirty = true; } persistCwork(); };
+  // 특약 사항 목록
+  const drawExtras = () => {
+    $('#c-extras').innerHTML = (c.extras || []).map((x, i) => `<div class="btnrow" style="margin-bottom:6px;flex-wrap:nowrap"><input data-ex="${i}" value="${esc(x)}" style="flex:1;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:15px" /><button type="button" class="btn ghost sm" data-exdel="${i}" style="flex:none">✕</button></div>`).join('') || '<p class="hint" style="margin:0">없음</p>';
+    view.querySelectorAll('[data-ex]').forEach((el) => (el.oninput = () => { c.extras[+el.dataset.ex] = el.value; touchC(); }));
+    view.querySelectorAll('[data-exdel]').forEach((b) => (b.onclick = () => { c.extras.splice(+b.dataset.exdel, 1); touchC(); drawExtras(); }));
+  };
+  drawExtras();
+  $('#c-add-ex').onclick = () => { c.extras = [...(c.extras || []), '']; drawExtras(); view.querySelector(`[data-ex="${c.extras.length - 1}"]`)?.focus(); };
+  // 화면 값을 계약서에 담기
+  const collect = () => {
+    c.request = $('#c-req').value.trim();
+    c.startDate = $('#c-start').value;
+    c.endDate = $('#c-end').value;
+    c.custom = $('#c-custom').checked;
+    c.customItem = $('#c-item').value.trim();
+    c.depositRate = parseNum($('#c-rate').value) || 0;
+    c.deposit = parseNum($('#c-dep').value);
+    c.balanceTerm = $('#c-bal').value.trim() || '작업 완료 시 지급';
+    c.asPeriod = $('#c-as-in').value.trim() || '없음';
+    c.extras = (c.extras || []).map((x) => x.trim()).filter(Boolean);
+    c.withQuote = withQ();
+    if (!usesQuote(c)) {
+      c.amount = parseNum($('#c-amt').value);
+      c.vatMode = $('#c-vat .on')?.dataset.v || 'none';
     }
-    // 특약 사항 목록
-    const drawExtras = () => {
-      $('#c-extras', sh).innerHTML = (c.extras || []).map((x, i) => `<div class="btnrow" style="margin-bottom:6px;flex-wrap:nowrap"><input data-ex="${i}" value="${esc(x)}" style="flex:1;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:15px" /><button type="button" class="btn ghost sm" data-exdel="${i}" style="flex:none">✕</button></div>`).join('') || '<p class="hint" style="margin:0">없음</p>';
-      sh.querySelectorAll('[data-ex]').forEach((el) => (el.oninput = () => { c.extras[+el.dataset.ex] = el.value; }));
-      sh.querySelectorAll('[data-exdel]').forEach((b) => (b.onclick = () => { c.extras.splice(+b.dataset.exdel, 1); drawExtras(); }));
-    };
-    drawExtras();
-    $('#c-add-ex', sh).onclick = () => { c.extras = [...(c.extras || []), '']; drawExtras(); sh.querySelector(`[data-ex="${c.extras.length - 1}"]`)?.focus(); };
-    // 계약금·잔금 계산 보여 주기
-    const collect = () => {
-      c.request = $('#c-req', sh).value.trim();
-      c.startDate = $('#c-start', sh).value;
-      c.endDate = $('#c-end', sh).value;
-      c.custom = $('#c-custom', sh).checked;
-      c.customItem = $('#c-item', sh).value.trim();
-      c.depositRate = parseNum($('#c-rate', sh).value) || 0;
-      c.deposit = parseNum($('#c-dep', sh).value);
-      c.balanceTerm = $('#c-bal', sh).value.trim() || '작업 완료 시 지급';
-      c.asPeriod = $('#c-as-in', sh).value.trim() || '없음';
-      c.extras = (c.extras || []).map((x) => x.trim()).filter(Boolean);
-      c.withQuote = withQ();
-      if (!usesQuote(c)) {
-        c.amount = parseNum($('#c-amt', sh).value);
-        c.vatMode = $('#c-vat .on', sh)?.dataset.v || 'none';
-      }
-      return { name: $('#c-name', sh).value.trim(), phone: $('#c-phone', sh).value.trim(), address: $('#c-addr', sh).value.trim() };
-    };
-    const split = () => {
-      const t = { ...c, custom: $('#c-custom', sh).checked, depositRate: parseNum($('#c-rate', sh).value), deposit: parseNum($('#c-dep', sh).value), amount: $('#c-amt', sh) ? parseNum($('#c-amt', sh).value) : c.amount };
-      const mm = money(q, t);
-      $('#c-split', sh).textContent = mm.deposit ? `계약금 ${won(mm.deposit)} · 잔금 ${won(mm.balance)}` : '계약금 없이 잔금으로 한 번에 받아요';
-    };
-    split();
-    $('#c-custom', sh).onchange = (e) => { $('#c-custom-box', sh).hidden = !e.target.checked; $('#c-dep-box', sh).hidden = e.target.checked; split(); };
-    ['#c-rate', '#c-dep', '#c-amt'].forEach((id) => $(id, sh)?.addEventListener('input', split));
-    ['#c-dep', '#c-amt'].forEach((id) => $(id, sh)?.addEventListener('input', (e) => { const v = parseNum(e.target.value); e.target.value = v ? num(v) : ''; }));
-    $('#c-vat', sh)?.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-v]');
-      if (b) $('#c-vat', sh).querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-    });
-    $('#c-as', sh).addEventListener('click', (e) => {
-      const b = e.target.closest('[data-as]');
-      if (!b) return;
-      $('#c-as-in', sh).value = b.dataset.as;
-      $('#c-as', sh).querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-    });
-    const persist = async () => {
-      const cu = collect();
-      return saveContract(q, c, { customer: { ...(q.customer || {}), ...cu } });
-    };
-    $('#c-save', sh).onclick = async () => { await persist(); toast('계약서를 저장했어요'); };
-    $('#c-prev', sh).onclick = async () => { const nq = await persist(); previewContract(nq, c); };
-    $('#c-sign', sh).onclick = async () => {
-      const nq = await persist();
-      if (!nq.customer?.name) return alert('고객명(상호명)을 먼저 넣어 주세요.');
-      if (!c.request) return alert('공사 내용을 먼저 넣어 주세요.');
-      const mm = money(nq, c);
-      if (!mm.total) return alert('계약 금액을 먼저 넣어 주세요.');
-      const sig = await signaturePad({ title: '고객 서명', note: `${nq.customer.name} · 계약 금액 ${won(mm.total)}` });
-      if (!sig) return;
-      const { contract, contractHistory, dirty, ...snap } = structuredClone(nq);
-      const done = {
-        ...c, signature: sig, signedAt: `${today()}T${new Date().toTimeString().slice(0, 5)}` /* 한국 시간 */, signName: nq.customer.name, quoteSnap: snap,
-        party: { company: s.company, owner: s.owner, bizNo: s.bizNo, phone: s.phone, address: s.address, account: s.account, stamp: s.stamp },
-      };
-      const final = await saveContract(nq, done, ['상담중', '발송'].includes(nq.status) ? { status: '계약' } : {});
-      closeSheet();
-      toast('서명 완료! 계약서 PDF를 만들고 있어요');
-      sendContract(final, done, canMerge && done.withQuote !== false);
-    };
+    c.customer = { name: $('#c-name').value.trim(), phone: $('#c-phone').value.trim(), address: $('#c-addr').value.trim() };
+  };
+  // 입력할 때마다 기기에 임시 저장 (창을 닫아도 남게)
+  $('#c-form').addEventListener('input', () => { collect(); touchC(); });
+  $('#c-form').addEventListener('change', () => { collect(); touchC(); });
+  const split = () => {
+    const t = { ...c, custom: $('#c-custom').checked, depositRate: parseNum($('#c-rate').value), deposit: parseNum($('#c-dep').value), amount: $('#c-amt') ? parseNum($('#c-amt').value) : c.amount };
+    const mm = money(q, t);
+    $('#c-split').textContent = mm.deposit ? `계약금 ${won(mm.deposit)} · 잔금 ${won(mm.balance)}` : '계약금 없이 잔금으로 한 번에 받아요';
+  };
+  split();
+  $('#c-custom').onchange = (e) => { $('#c-custom-box').hidden = !e.target.checked; $('#c-dep-box').hidden = e.target.checked; split(); };
+  ['#c-rate', '#c-dep', '#c-amt'].forEach((id) => $(id)?.addEventListener('input', split));
+  ['#c-dep', '#c-amt'].forEach((id) => $(id)?.addEventListener('input', (e) => { const v = parseNum(e.target.value); e.target.value = v ? num(v) : ''; }));
+  $('#c-vat')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-v]');
+    if (!b) return;
+    $('#c-vat').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    collect();
+    touchC();
   });
+  $('#c-as').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-as]');
+    if (!b) return;
+    $('#c-as-in').value = b.dataset.as;
+    $('#c-as').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    collect();
+    touchC();
+  });
+  $('#c-save').onclick = async () => { collect(); await saveCwork(); toast(`계약서를 저장했어요 (No. ${c.no})`); renderContract(); };
+  $('#c-prev').onclick = () => { collect(); previewContract(q, c); };
+  $('#c-sign').onclick = async () => {
+    collect();
+    if (!c.customer.name) return alert('고객명(상호명)을 먼저 넣어 주세요.');
+    if (!c.request) return alert('작업 요청 내용을 먼저 넣어 주세요.');
+    const mm = money(q, c);
+    if (!mm.total) return alert('계약 금액을 먼저 넣어 주세요.');
+    await saveCwork();
+    const sig = await signaturePad({ title: '고객 서명', note: `${c.customer.name} · 계약 금액 ${won(mm.total)}` });
+    if (!sig) return;
+    let snap;
+    if (usesQuote(c) && q) {
+      const { contract, contractHistory, dirty, ...rest } = structuredClone(q);
+      snap = rest;
+    }
+    await saveCwork({
+      signature: sig, signedAt: `${today()}T${new Date().toTimeString().slice(0, 5)}` /* 한국 시간 */, signName: c.customer.name,
+      ...(snap ? { quoteSnap: snap } : {}),
+      party: { company: s.company, owner: s.owner, bizNo: s.bizNo, phone: s.phone, address: s.address, account: s.account, stamp: s.stamp },
+    });
+    // 연결된 견적은 '계약' 상태로
+    if (q && ['상담중', '발송'].includes(q.status)) await saveQuote({ ...q, status: '계약', updatedAt: Date.now(), updatedBy: author() });
+    renderContract();
+    toast('서명 완료! 계약서 PDF를 만들고 있어요');
+    sendContract(q, cwork, canMerge && cwork.withQuote !== false);
+  };
 }
 
 async function previewContract(q, c) {
@@ -807,25 +894,107 @@ async function sendContract(q, c, withQuote) {
   }
 }
 
+// 계약 내역 한 줄
+function contractRow(c) {
+  const m = money(linkedQuote(c), c);
+  return `<div class="row" data-cid="${c.id}" style="cursor:pointer">
+    <div class="main">
+      <div class="name">${esc(contractName(c))} <span class="status ${c.signedAt ? 's-완료' : ''}">${c.signedAt ? '서명 완료' : '작성 중'}</span></div>
+      <div class="meta">${esc((c.signedAt || '').slice(0, 10) || c.date || '')} · No.${esc(c.no || '')}${usesQuote(c) && (c.quoteSnap || linkedQuote(c))?.no ? ` · 견적 ${esc((c.quoteSnap || linkedQuote(c)).no)}` : ''}</div>
+      <div class="meta">${esc((c.request || '').split('\n')[0].replace(/^·\s*/, ''))}</div>
+    </div>
+    <div class="price">${won(m.total)}</div>
+  </div>`;
+}
+function bindContractRows() {
+  view.querySelectorAll('[data-cid]').forEach((r) => (r.onclick = () => contractSheet(r.dataset.cid)));
+}
+function contractSheet(id) {
+  const c = store.state.contracts.find((x) => x.id === id);
+  if (!c) return;
+  const q = linkedQuote(c);
+  const m = money(q, c);
+  const canMerge = usesQuote(c) && hasQuoteLines(c.quoteSnap || q);
+  openSheet(`
+    <h2>${esc(contractName(c))} <span class="status ${c.signedAt ? 's-완료' : ''}">${c.signedAt ? '서명 완료' : '작성 중'}</span></h2>
+    <p class="hint">계약 No.${esc(c.no)}${c.signedAt ? ` · ${esc(c.signedAt.slice(0, 10))} 서명` : ''}<br/>${esc(c.customer?.address || '')}</p>
+    <div class="totals"><div class="tr grand"><span>계약 금액</span><span>${won(m.total)}</span></div></div>
+    <div class="btnrow" style="flex-direction:column;margin-top:12px">
+      <button class="btn block" id="cs-open">${c.signedAt ? '👀 계약서 열기' : '✏️ 이어서 작성'}</button>
+      ${c.signedAt ? '<button class="btn orange block" id="cs-send">📤 계약서 PDF 보내기</button>' : ''}
+      <button class="btn danger block" id="cs-del">삭제</button>
+    </div>`, () => {
+    $('#cs-open').onclick = () => { if (!confirmLeaveContract()) return; closeSheet(); openSavedContract(c.id); };
+    $('#cs-send') && ($('#cs-send').onclick = () => { closeSheet(); sendContract(q, c, canMerge && c.withQuote !== false); });
+    $('#cs-del').onclick = async () => {
+      if (!confirm(`${c.signedAt ? '서명까지 받은 ' : ''}이 계약서를 삭제할까요? 되돌릴 수 없습니다.`)) return;
+      await deleteContractDoc(c.id);
+      if (cwork?.id === c.id) { cwork = null; persistCwork(); }
+      closeSheet();
+      toast('삭제했습니다');
+    };
+  });
+}
+
+// 예전에 견적에 붙여 두었던 계약서(q.contract)를 계약서 목록(contracts)으로 옮김 (한 번만)
+let movingContracts = false;
+async function moveOldContracts() {
+  if (movingContracts || !store.ready || (store.mode === 'cloud' && !(store.user && store.online))) return;
+  const olds = store.state.quotes.filter((q) => q.contract);
+  if (!olds.length) return;
+  movingContracts = true;
+  try {
+    for (const q of olds) {
+      const { contract, contractHistory, ...rest } = q;
+      const id = 'ct' + q.id;
+      if (!store.state.contracts.some((x) => x.id === id)) {
+        await saveContractDoc({
+          useQuote: true, ...contract, id, quoteId: q.id, customer: { ...(q.customer || {}) },
+          no: nextContractNo((contract.signedAt || q.date || today()).slice(0, 10), store.state.contracts),
+          date: (contract.signedAt || q.date || today()).slice(0, 10), createdAt: q.updatedAt || Date.now(), updatedAt: Date.now(),
+        });
+      }
+      await saveQuote(rest);
+    }
+    if (draft.contract) { delete draft.contract; delete draft.contractHistory; persistDraft(); }
+  } finally {
+    movingContracts = false;
+  }
+}
+
 /* ---------- 견적 내역 ---------- */
 function renderHistory() {
+  const isQ = ui.hkind !== 'contract';
   view.innerHTML = `
     <div class="top">
-      <h1>📁 견적 내역 <span class="sub">${store.mode === 'cloud' ? '함께 보는 내역' : '이 기기에 저장된 내역'}</span></h1>
-      <div class="searchbox"><input id="hq" type="search" placeholder="고객명, 주소, 연락처, 항목 검색" value="${esc(ui.hq)}" /></div>
+      <h1>📁 견적/계약 내역 <span class="sub">${store.mode === 'cloud' ? '함께 보는 내역' : '이 기기에 저장된 내역'}</span></h1>
+      <div class="seg" id="hkind" style="margin:0 0 10px;background:rgba(255,255,255,.15)">
+        <button data-k="quote" class="${isQ ? 'on' : ''}" style="${isQ ? '' : 'color:#fff'}">🧾 견적 ${store.state.quotes.length}</button>
+        <button data-k="contract" class="${isQ ? '' : 'on'}" style="${isQ ? 'color:#fff' : ''}">✍️ 계약 ${store.state.contracts.length}</button>
+      </div>
+      <div class="searchbox"><input id="hq" type="search" placeholder="${isQ ? '고객명, 주소, 연락처, 항목 검색' : '고객명, 주소, 연락처, 공사 내용 검색'}" value="${esc(ui.hq)}" /></div>
     </div>
     <div class="chips" id="hchips">
-      ${['전체', ...STATUSES].map((n) => `<button class="chip ${ui.hstatus === n ? 'on' : ''}" data-st="${n}">${n}</button>`).join('')}
+      ${isQ
+    ? ['전체', ...STATUSES].map((n) => `<button class="chip ${ui.hstatus === n ? 'on' : ''}" data-st="${n}">${n}</button>`).join('')
+    : ['전체', '작성 중', '서명 완료'].map((n) => `<button class="chip ${ui.cstatus === n ? 'on' : ''}" data-st="${n}">${n}</button>`).join('')}
     </div>
-    ${knownAuthors().length > 1 || ui.hauthor !== '전체' ? `<div class="chips" id="hauthors" style="padding-top:0">
+    ${isQ && (knownAuthors().length > 1 || ui.hauthor !== '전체') ? `<div class="chips" id="hauthors" style="padding-top:0">
       ${['전체', ...knownAuthors()].map((n) => `<button class="chip ${ui.hauthor === n ? 'on' : ''}" data-au="${esc(n)}">${n === '전체' ? '👥 모든 작성자' : '✍️ ' + esc(n) + (n === author() ? ' (나)' : '')}</button>`).join('')}
     </div>` : ''}
     <div id="hlist"></div>`;
+  $('#hkind').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-k]');
+    if (!b || b.dataset.k === ui.hkind) return;
+    ui.hkind = b.dataset.k;
+    renderHistory();
+  });
   $('#hq').addEventListener('input', (e) => { ui.hq = e.target.value; renderHList(); });
   $('#hchips').addEventListener('click', (e) => {
     const c = e.target.closest('[data-st]');
     if (!c) return;
-    ui.hstatus = c.dataset.st;
+    if (isQ) ui.hstatus = c.dataset.st;
+    else ui.cstatus = c.dataset.st;
     document.querySelectorAll('#hchips .chip').forEach((x) => x.classList.toggle('on', x === c));
     renderHList();
   });
@@ -844,6 +1013,18 @@ function renderHList() {
   const box = $('#hlist');
   if (!box) return;
   const w = ui.hq.trim().toLowerCase();
+  if (ui.hkind === 'contract') {
+    const cl = store.state.contracts
+      .filter((c) => ui.cstatus === '전체' || (ui.cstatus === '서명 완료') === !!c.signedAt)
+      .filter((c) => !w || [c.no, c.customer?.name, c.customer?.address, c.customer?.phone, c.request].join(' ').toLowerCase().includes(w))
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    box.innerHTML = cl.length ? `<div class="list" style="margin-top:8px">${cl.map(contractRow).join('')}</div>` : '<div class="empty">조건에 맞는 계약서가 없습니다.<br/>계약서 탭에서 새로 만들 수 있어요.</div>';
+    const ct = cl.reduce((s, c) => s + money(linkedQuote(c), c).total, 0);
+    if (cl.length) box.insertAdjacentHTML('afterbegin', `<div class="section-h"><span>${cl.length}건</span><span>합계 ${won(ct)}</span></div>`);
+    bindContractRows();
+    return;
+  }
+  const signedQ = new Set(store.state.contracts.filter((c) => c.signedAt && c.quoteId).map((c) => c.quoteId));
   const list = store.state.quotes
     .filter((q) => ui.hstatus === '전체' || q.status === ui.hstatus)
     .filter((q) => ui.hauthor === '전체' || quoteAuthor(q) === ui.hauthor)
@@ -853,7 +1034,7 @@ function renderHList() {
     ? `<div class="list" style="margin-top:8px">${list.map((q) => `
       <div class="row" data-qid="${q.id}" data-act="open-quote">
         <div class="main">
-          <div class="name">${esc(q.customer?.name || '(고객명 없음)')} <span class="status s-${esc(q.status)}">${esc(q.status)}</span>${q.contract?.signedAt ? ' <span class="status s-완료">✍️ 서명</span>' : ''}</div>
+          <div class="name">${esc(q.customer?.name || '(고객명 없음)')} <span class="status s-${esc(q.status)}">${esc(q.status)}</span>${signedQ.has(q.id) ? ' <span class="status s-완료">✍️ 계약서 서명</span>' : ''}</div>
           <div class="meta">${esc(q.date)} · No.${esc(q.no)}${quoteAuthor(q) ? ' · ✍️ ' + esc(quoteAuthor(q)) : ''}</div>
           <div class="meta">${esc((q.lines || []).map((l) => l.name).join(', '))}</div>
         </div>
@@ -865,6 +1046,7 @@ function renderHList() {
 }
 
 function quoteSheet(q) {
+  const linked = store.state.contracts.filter((c) => c.quoteId === q.id);
   openSheet(`
     <h2>${esc(q.customer?.name || '(고객명 없음)')} <span class="status s-${esc(q.status)}">${esc(q.status)}</span></h2>
     <p class="hint">No.${esc(q.no)} · ${esc(q.date)}${quoteAuthor(q) ? ' · ✍️ ' + esc(quoteAuthor(q)) : ''}<br/>${esc(q.customer?.address || '')}</p>
@@ -877,7 +1059,7 @@ function quoteSheet(q) {
     <div class="btnrow" style="flex-direction:column">
       <button class="btn block" id="h-edit">✏️ 불러와서 수정</button>
       <button class="btn orange block" id="h-pdf">📄 PDF 견적서</button>
-      <button class="btn block" id="h-contract">✍️ 계약서${q.contract?.signedAt ? ` (서명 완료 ${esc(q.contract.signedAt.slice(5, 10).replace('-', '/'))})` : q.contract ? ' (작성 중)' : ' 작성'}</button>
+      <button class="btn block" id="h-contract">✍️ 이 견적으로 계약서 만들기${linked.length ? ` (계약서 ${linked.length}건)` : ''}</button>
       <button class="btn ghost block" id="h-copy">📑 복사해서 새 견적 만들기</button>
       <button class="btn danger block" id="h-del">삭제</button>
     </div>`, () => {
@@ -890,7 +1072,12 @@ function quoteSheet(q) {
       go('quote');
     };
     $('#h-pdf').onclick = () => { closeSheet(); doPdf(q); };
-    $('#h-contract').onclick = () => { closeSheet(); openContract(q.id); };
+    $('#h-contract').onclick = () => {
+      if (!hasQuoteLines(q)) return alert('견적 항목이 없는 견적이에요. 계약서 탭에서 빈 계약서로 시작해 주세요.');
+      if (!confirmLeaveContract()) return;
+      closeSheet();
+      startContract(q);
+    };
     $('#h-copy').onclick = () => {
       if (!confirmLeaveDraft()) return;
       draft = { ...structuredClone(q), id: null, no: '', date: today(), status: '상담중', dirty: true, author: author(), createdBy: undefined };
@@ -1099,11 +1286,6 @@ document.addEventListener('click', async (e) => {
       if (draft.dirty) await saveDraft(true);
       doPdf(draft);
       break;
-    case 'contract':
-      // 견적 내용이 없어도 계약서를 새로 쓸 수 있음 (계약서를 붙여 둘 견적 한 건은 저장)
-      if ((!draft.id || draft.dirty) && !(await saveDraft(true, { allowEmpty: true }))) return;
-      openContract(draft.id);
-      break;
     case 'copy-msg':
       toast((await copyText(buildMessage(draft, store.state))) ? '복사했습니다. 카톡에 붙여넣기 하세요' : '복사하지 못했습니다');
       break;
@@ -1122,6 +1304,7 @@ document.addEventListener('click', async (e) => {
 let renderQueued = false;
 subscribe(() => {
   // 입력 중 화면이 다시 그려져 커서가 사라지지 않도록, 입력과 무관한 부분만 갱신
+  moveOldContracts();
   if (renderQueued) return;
   renderQueued = true;
   setTimeout(() => {
@@ -1131,6 +1314,7 @@ subscribe(() => {
     if (store.mode === 'cloud' && !store.user) return render();
     if (tab === 'search' && typing) return renderResults();
     if (tab === 'history' && typing) return renderHList();
+    if (tab === 'contract' && typing) return; // 계약서 입력 중에는 다시 그리지 않음
     if (typing) return; // 견적서·설정 입력 중에는 다시 그리지 않음
     if (tab === 'search' && $('#results')) {
       renderResults();
