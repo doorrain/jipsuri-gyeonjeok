@@ -71,20 +71,82 @@ function updateBadge() {
 }
 function openSheet(html, onMount) {
   const root = $('#sheet-root');
-  root.innerHTML = `<div class="sheet-bg"><div class="sheet"><div class="grab"></div>${html}</div></div>`;
+  const back = html.includes('sheet-back') ? '' : '<button type="button" class="sheet-back" data-sheet-back>← 이전</button>';
+  root.innerHTML = `<div class="sheet-bg"><div class="sheet"><div class="grab"></div>${back}${html}</div></div>`;
   const bg = root.firstElementChild;
   bg.addEventListener('click', (e) => { if (e.target === bg) closeSheet(); });
+  const sb = bg.querySelector('[data-sheet-back]');
+  if (sb) sb.onclick = closeSheet;
   onMount && onMount(bg.firstElementChild);
 }
 function closeSheet() {
   $('#sheet-root').innerHTML = '';
 }
+/* ---------- 이전(뒤로) 이동 ----------
+   화면을 옮길 때마다 기록을 남겨서, 화면 위 [← 이전] 버튼이나 휴대폰 뒤로 가기로 바로 전 화면에 돌아가요.
+   팝업(시트)·미리 보기·서명 칸이 떠 있으면 뒤로 가기는 그것부터 닫아요. */
+let cworkBefore = null; // 계약서 화면에서 '새 계약서'로 넘어가기 전에 보던 계약서 (뒤로 가면 다시 보여 줌)
+const navState = (t) => ({ t, cv: t === 'contract' ? (cwork ? 'edit' : 'start') : '' });
+const sameNav = (a, b) => a && b && a.t === b.t && a.cv === b.cv;
+let curNav = { t: tab, cv: '', d: 0 }; // 시작할 때 다시 정함 (아래 "시작")
 function go(t) {
   tab = t;
-  history.replaceState(null, '', '#' + t);
+  const next = navState(t);
+  if (sameNav(next, curNav)) {
+    curNav = { ...next, d: curNav.d };
+    history.replaceState(curNav, '', '#' + t);
+  } else {
+    curNav = { ...next, d: curNav.d + 1 };
+    history.pushState(curNav, '', '#' + t);
+  }
   render();
   window.scrollTo(0, 0);
 }
+function goBack() {
+  if (closeTopOverlay()) return;
+  if (curNav.d > 0) history.back();
+  else if (tab !== 'search') { // 앱을 처음 연 화면이면 첫 화면(단가 검색)으로
+    tab = 'search';
+    curNav = { ...navState('search'), d: 0 };
+    history.replaceState(curNav, '', '#search');
+    render();
+    window.scrollTo(0, 0);
+  }
+}
+// 떠 있는 팝업·미리 보기·서명 칸을 닫음 (닫은 게 있으면 true)
+function closeTopOverlay() {
+  const sp = document.querySelector('.sigpad');
+  if (sp) { sp.querySelector('[data-sp="cancel"]').click(); return true; }
+  const pv = document.querySelector('.pv-overlay');
+  if (pv) { pv.remove(); return true; }
+  if ($('#sheet-root').innerHTML) { closeSheet(); return true; }
+  return false;
+}
+window.addEventListener('popstate', (e) => {
+  if (closeTopOverlay()) { history.pushState(curNav, '', '#' + curNav.t); return; } // 화면은 그대로 두고 팝업만 닫기
+  const st = e.state || { ...navState((location.hash || '#search').slice(1)), d: 0 };
+  if (st.t === 'contract') {
+    if (st.cv === 'start' && cwork) { cworkBefore = cwork; cwork = null; persistCwork(); }
+    else if (st.cv === 'edit' && !cwork && cworkBefore) { cwork = cworkBefore; cworkBefore = null; persistCwork(); }
+  }
+  tab = st.t;
+  curNav = { ...navState(tab), d: st.d || 0 };
+  render();
+  window.scrollTo(0, 0);
+});
+// 모든 화면 제목 왼쪽에 [← 이전] 버튼
+function addBackButton() {
+  const h1 = view.querySelector('.top h1');
+  if (!h1 || h1.querySelector('.backbtn') || $('#tabbar').hidden) return;
+  if (curNav.d === 0 && tab === 'search') return; // 맨 처음 화면에는 돌아갈 곳이 없음
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'backbtn';
+  b.textContent = '← 이전';
+  b.onclick = goBack;
+  h1.prepend(b);
+}
+new MutationObserver(addBackButton).observe(view, { childList: true });
 document.getElementById('tabbar').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-tab]');
   if (b) go(b.dataset.tab);
@@ -767,9 +829,10 @@ function renderContract() {
 
   $('#c-new').onclick = () => {
     if (!confirmLeaveContract()) return;
+    cworkBefore = cwork;
     cwork = null;
     persistCwork();
-    renderContract();
+    go('contract');
   };
   const withQ = () => canMerge && $('#c-withq')?.checked !== false;
   if (signed) {
@@ -778,7 +841,7 @@ function renderContract() {
     $('#c-send').onclick = () => sendContract(q, c, withQ());
     $('#c-redo').onclick = async () => {
       if (!confirm('서명한 계약서는 기록으로 남기고, 내용을 고칠 수 있는 새 계약서를 만들까요?\n새 계약서는 고객에게 다시 서명받아야 해요.')) return;
-      const { signature, signedAt, party, quoteSnap, signName, id, no, createdAt, createdBy, ...rest } = c;
+      const { signature, signNameImg, signedAt, party, quoteSnap, signName, id, no, createdAt, createdBy, ...rest } = c;
       cwork = { ...rest, id: null, no: '', date: today(), replaces: c.no, dirty: true };
       persistCwork();
       renderContract();
@@ -851,14 +914,14 @@ function renderContract() {
     if (!mm.total) return alert('계약 금액을 먼저 넣어 주세요.');
     await saveCwork();
     const sig = await signaturePad({ title: '고객 서명', note: `${c.customer.name} · 계약 금액 ${won(mm.total)}` });
-    if (!sig) return;
+    if (!sig?.sign) return;
     let snap;
     if (usesQuote(c) && q) {
       const { contract, contractHistory, dirty, ...rest } = structuredClone(q);
       snap = rest;
     }
     await saveCwork({
-      signature: sig, signedAt: `${today()}T${new Date().toTimeString().slice(0, 5)}` /* 한국 시간 */, signName: c.customer.name,
+      signature: sig.sign, signNameImg: sig.name, signedAt: `${today()}T${new Date().toTimeString().slice(0, 5)}` /* 한국 시간 */, signName: c.customer.name,
       ...(snap ? { quoteSnap: snap } : {}),
       party: { company: s.company, owner: s.owner, bizNo: s.bizNo, phone: s.phone, address: s.address, account: s.account, stamp: s.stamp },
     });
@@ -876,7 +939,7 @@ async function previewContract(q, c) {
     const imgs = await contractPreview(q, c, store.state.settings);
     const ov = document.createElement('div');
     ov.className = 'pv-overlay';
-    ov.innerHTML = `<div class="pv-bar"><b>계약서 미리 보기</b><button class="btn sm ghost" id="pv-x">닫기</button></div>${imgs.map((u) => `<img src="${u}" alt="계약서" />`).join('')}`;
+    ov.innerHTML = `<div class="pv-bar"><b>계약서 미리 보기</b><button class="btn sm ghost" id="pv-x">← 이전</button></div>${imgs.map((u) => `<img src="${u}" alt="계약서" />`).join('')}`;
     document.body.append(ov);
     ov.querySelector('#pv-x').onclick = () => ov.remove();
   } catch (e) {
@@ -970,11 +1033,11 @@ function renderHistory() {
   view.innerHTML = `
     <div class="top">
       <h1>📁 견적/계약 내역 <span class="sub">${store.mode === 'cloud' ? '함께 보는 내역' : '이 기기에 저장된 내역'}</span></h1>
-      <div class="seg" id="hkind" style="margin:0 0 10px;background:rgba(255,255,255,.15)">
-        <button data-k="quote" class="${isQ ? 'on' : ''}" style="${isQ ? '' : 'color:#fff'}">🧾 견적 ${store.state.quotes.length}</button>
-        <button data-k="contract" class="${isQ ? '' : 'on'}" style="${isQ ? 'color:#fff' : ''}">✍️ 계약 ${store.state.contracts.length}</button>
+      <div class="searchbox slim"><input id="hq" type="search" placeholder="${isQ ? '고객명, 주소, 연락처, 항목 검색' : '고객명, 주소, 연락처, 공사 내용 검색'}" value="${esc(ui.hq)}" /></div>
+      <div class="seg kind" id="hkind">
+        <button data-k="quote" class="${isQ ? 'on' : ''}">🧾 견적 ${store.state.quotes.length}</button>
+        <button data-k="contract" class="${isQ ? '' : 'on'}">✍️ 계약 ${store.state.contracts.length}</button>
       </div>
-      <div class="searchbox"><input id="hq" type="search" placeholder="${isQ ? '고객명, 주소, 연락처, 항목 검색' : '고객명, 주소, 연락처, 공사 내용 검색'}" value="${esc(ui.hq)}" /></div>
     </div>
     <div class="chips" id="hchips">
       ${isQ
@@ -1076,9 +1139,7 @@ function quoteSheet(q) {
     $('#h-pdf').onclick = () => { closeSheet(); doPdf(q); };
     $('#h-contract').onclick = () => {
       if (!hasQuoteLines(q)) return alert('견적 항목이 없는 견적이에요. 계약서 탭에서 빈 계약서로 시작해 주세요.');
-      if (!confirmLeaveContract()) return;
-      closeSheet();
-      startContract(q);
+      contractChoiceSheet(q);
     };
     $('#h-copy').onclick = () => {
       if (!confirmLeaveDraft()) return;
@@ -1096,6 +1157,52 @@ function quoteSheet(q) {
       closeSheet();
       toast('삭제했습니다');
     };
+  });
+}
+
+// 이 견적으로 계약서 만들기: 전에 만들던 계약서를 불러올지, 새로 만들지 고르기
+function contractChoiceSheet(q) {
+  const linked = store.state.contracts.filter((c) => c.quoteId === q.id).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const unsaved = cwork && !cwork.id && !cwork.signedAt && cwork.quoteId === q.id; // 저장 전에 작성하던 것
+  if (!linked.length && !unsaved) { // 불러올 게 없으면 바로 새로
+    if (!confirmLeaveContract()) return;
+    closeSheet();
+    startContract(q);
+    return;
+  }
+  const row = (c, key) => {
+    const st = c.signedAt ? '서명 완료' : c.id ? '작성 중' : '저장 전';
+    const when = c.signedAt ? c.signedAt.slice(0, 10) + ' 서명' : c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('ko-KR') + ' 수정' : '이 기기에서 작성 중';
+    return `<div class="row" data-pick="${key}"><div class="main">
+      <div class="name">${c.no ? 'No.' + esc(c.no) : '번호 없음'} <span class="status ${c.signedAt ? 's-완료' : ''}">${st}</span></div>
+      <div class="meta">${esc(when)} · ${won(money(linkedQuote(c), c).total)}</div>
+      <div class="meta">${esc((c.request || '').split('\n')[0].replace(/^·\s*/, ''))}</div></div>
+      <span class="go">${c.signedAt ? '열기 ›' : '이어서 작성 ›'}</span></div>`;
+  };
+  openSheet(`
+    <button type="button" class="sheet-back" id="cc-back">← 이전</button>
+    <h2>✍️ 계약서 만들기</h2>
+    <p class="hint">${esc(q.customer?.name || '(고객명 없음)')} · 견적 No.${esc(q.no)}<br/>이 견적으로 만든 계약서가 ${linked.length + (unsaved ? 1 : 0)}건 있어요. 이어서 작성할 계약서를 고르거나, 새로 만드세요.</p>
+    <div class="list pick-list" style="border-radius:10px;overflow:hidden;border:1px solid var(--line)">
+      ${unsaved ? row(cwork, 'unsaved') : ''}
+      ${linked.map((c) => row(c, c.id)).join('')}
+    </div>
+    <div class="btnrow" style="flex-direction:column;margin-top:12px">
+      <button class="btn orange block" id="cc-new">＋ 새 계약서 작성</button>
+    </div>`, (sh) => {
+    $('#cc-back', sh).onclick = () => quoteSheet(store.state.quotes.find((x) => x.id === q.id) || q);
+    $('#cc-new', sh).onclick = () => {
+      if (!confirmLeaveContract()) return;
+      closeSheet();
+      startContract(q);
+    };
+    sh.querySelectorAll('[data-pick]').forEach((r) => (r.onclick = () => {
+      const id = r.dataset.pick;
+      closeSheet();
+      if (id === 'unsaved' || cwork?.id === id) return go('contract'); // 지금 작성 중인 그 계약서 그대로
+      if (!confirmLeaveContract()) return;
+      openSavedContract(id);
+    }));
   });
 }
 
@@ -1326,6 +1433,8 @@ subscribe(() => {
   });
 });
 
+curNav = { ...navState(tab), d: 0 };
+history.replaceState(curNav, '', '#' + tab);
 render();
 initStore().catch((e) => {
   console.error(e);

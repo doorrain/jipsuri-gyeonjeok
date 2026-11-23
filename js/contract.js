@@ -163,6 +163,7 @@ async function contractCanvases(q, c, s) {
           <tr><td class="k">고객명(상호)</td><td>${esc(cust.name || '')}</td></tr>
           <tr><td class="k">연락처</td><td>${esc(cust.phone || '')}</td></tr>
           <tr><td class="k">현장 주소</td><td>${esc(cust.address || '')}</td></tr>
+          ${c.signNameImg ? `<tr><td class="k">성명(자필)</td><td><div class="sg"><img class="sig" src="${c.signNameImg}" /></div></td></tr>` : ''}
           <tr><td class="k">서명</td><td><div class="sg"><span class="in">(인/서명)</span>${c.signature ? `<img class="sig" src="${c.signature}" />` : ''}</div></td></tr>
         </table></div>
         <div class="party"><h5>시공자</h5><table>
