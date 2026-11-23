@@ -102,7 +102,8 @@ const CSS = `
 .ct .party td.k{width:84px;color:#55606f;background:#f7f9fb}
 .ct .sg{position:relative;height:58px;display:flex;align-items:center}
 .ct .sg .in{color:#8a94a3;margin-left:auto;margin-right:6px}
-.ct .sg img.sig{position:absolute;right:4px;top:2px;height:54px;max-width:190px;object-fit:contain}
+.ct .sg img.sig{position:absolute;right:4px;top:2px;height:54px;max-width:52%;object-fit:contain;object-position:right center}
+.ct .sg img.nm{height:44px;max-width:46%;object-fit:contain;object-position:left center}
 .ct .sg img.stamp{position:absolute;right:2px;top:4px;width:50px;height:50px;object-fit:contain;opacity:.9}
 .ct .ft{position:absolute;left:${PAD}px;right:${PAD}px;bottom:22px;display:flex;justify-content:space-between;font-size:10.5px;color:#8a94a3;border-top:1px solid #e2e6ec;padding-top:6px}
 `;
@@ -163,8 +164,7 @@ async function contractCanvases(q, c, s) {
           <tr><td class="k">고객명(상호)</td><td>${esc(cust.name || '')}</td></tr>
           <tr><td class="k">연락처</td><td>${esc(cust.phone || '')}</td></tr>
           <tr><td class="k">현장 주소</td><td>${esc(cust.address || '')}</td></tr>
-          ${c.signNameImg ? `<tr><td class="k">성명(자필)</td><td><div class="sg"><img class="sig" src="${c.signNameImg}" /></div></td></tr>` : ''}
-          <tr><td class="k">서명</td><td><div class="sg"><span class="in">(인/서명)</span>${c.signature ? `<img class="sig" src="${c.signature}" />` : ''}</div></td></tr>
+          <tr><td class="k">${c.signature && !c.signNameImg ? '서명' : '성명'}</td><td><div class="sg">${c.signNameImg ? `<img class="nm" src="${c.signNameImg}" />` : ''}<span class="in">(인/서명)</span>${c.signature ? `<img class="sig" src="${c.signature}" />` : ''}</div></td></tr>
         </table></div>
         <div class="party"><h5>시공자</h5><table>
           <tr><td class="k">상호</td><td>${esc(p.company || '')}</td></tr>
