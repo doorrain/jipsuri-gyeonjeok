@@ -1,5 +1,5 @@
 // 앱 화면 파일을 저장해 두어 현장에서 신호가 약해도 열리게 합니다.
-const CACHE = 'gyeonjeok-v18';
+const CACHE = 'gyeonjeok-v19';
 const SHELL = [
   './', './index.html', './css/style.css', './manifest.webmanifest', './config.js',
   './js/app.js', './js/store.js', './js/rescue.js', './js/seed.js', './js/util.js', './js/quote.js', './js/pdf.js', './js/contract.js', './js/sign.js',
